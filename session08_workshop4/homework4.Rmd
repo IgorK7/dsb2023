@@ -1,8 +1,12 @@
 ---
-title: "Homework 4: Machine Learning"
-author: "Your name goes here"
+title: 'Homework 4: Machine Learning'
+author: "Igor Kuznetsov"
 date: "`r Sys.Date()`"
 output:
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
   html_document:
     theme: flatly
     highlight: zenburn
@@ -10,8 +14,6 @@ output:
     toc: yes
     toc_float: yes
     code_folding: show
-  pdf_document:
-    toc: yes
 ---
 
 ```{r}
@@ -30,6 +32,16 @@ library(rpart.plot)
 library(here)
 library(scales)
 library(vip)
+
+
+PackageList =c('tidyverse','tidymodels','GGally','sf','wbstats','data.table','countrycode', 'skimr', 'here','leaflet','janitor','rpart.plot','scales','vip','skimr','rsample','DataExplorer','gt','recipe')
+
+NewPackages=PackageList[!(PackageList %in% 
+                            installed.packages()[,"Package"])]
+
+if(length(NewPackages)) install.packages(NewPackages,repos = "http://cran.us.r-project.org")
+lapply(PackageList,require,character.only=TRUE) #array function
+
 ```
 
 
@@ -56,6 +68,13 @@ glimpse(bechdel)
 How many films fail/pass the test, both as a number and as a %?
 
 ```{r}
+
+skimr::skim(bechdel %>% mutate(test=factor(test)))
+
+bechdel %>% mutate(test=factor(test)) %>% mutate(total_count = n()) %>% group_by(test) %>% summarise(group_count=n(),fraction = n()/mean(total_count))
+  
+  
+  
 
 ```
 
@@ -95,11 +114,18 @@ bechdel_test <- testing(data_split)
 Check the counts and % (proportions) of the `test` variable in each set.
 ```{r}
 
+bechdel_train %>% mutate(test=factor(test)) %>% mutate(total_count = n()) %>% group_by(test) %>% summarise(group_count=n(),fraction = n()/mean(total_count))
+
+bechdel_test %>% mutate(test=factor(test)) %>% mutate(total_count = n()) %>% group_by(test) %>% summarise(group_count=n(),fraction = n()/mean(total_count))
+  
+
 ```
 
 ## Feature exploration
 
 ## Any outliers? 
+
+# IK: all the LHS variables except for metascore have outliers
 
 ```{r}
 
@@ -123,6 +149,9 @@ bechdel %>%
 ## Scatterplot - Correlation Matrix
 
 Write a paragraph discussing the output of the following 
+
+IK: we also need to log transform budget_2013, domgross_2013, intgross_2013 as they have skewed distributions with long LHS tails. 
+It appears that the predictors of the test should be budget_2013, domgross_2013, intgross_2013, and may be imdb_rating while there does not seem to be a meaningful difference in metascore for test groups. There also seems to be a very high correpation between domgross_2013 and intgross_2013 so we may consider dropping one of them as there no additional signal (predictive power) from including both of them. 
 ```{r, warning=FALSE, message=FALSE}
 bechdel %>% 
   select(test, budget_2013, domgross_2013, intgross_2013, imdb_rating, metascore)%>% 
@@ -134,6 +163,9 @@ bechdel %>%
 ## Categorical variables
 
 Write a paragraph discussing the output of the following 
+
+IK: It appears that there is a substantial variation in the proportion of the failed tests across movies ganres. Thus, action movies fail the test in more than 70% of the sample (the highest rate)  while comedy movies fail only in 42.7% cases (the lowest rate). The same is true for movie ratings. There seems to be more test values for G rated movies compared to all others except for NC-17 movies. However, NC-17 movie variation is not reliable because of very few observations in this category.
+
 ```{r}
 bechdel %>% 
   group_by(genre, test) %>%
@@ -234,13 +266,17 @@ plot(draw_tree)
 
 Run the code below. What does it return?
 
+IK: it returns an object that divides training dataset bechdel_train into 10 folds for cross validation 
+
 ```{r}
 set.seed(123)
 bechdel_folds <- vfold_cv(data = bechdel_train, 
                           v = 10, 
                           strata = test)
-bechdel_folds
+class(bechdel_folds)
+
 ```
+
 
 ## `fit_resamples()`
 
@@ -379,7 +415,12 @@ movie_rec
 What if there were no films with `rated` NC-17 in the training data?
 
 -  Will the model have a coefficient for `rated` NC-17?
+
+IK:  it will not have a coefficient. It depends on the alorithm but most likely it would be dropped as it would have a perfect colliniarity with the default group.
+
 -  What will happen if the test data includes a film with `rated` NC-17?
+
+IK: this information would not be used to predict the test. It would have the same effect as being in the default category.
 
 ## `step_novel()`
 
@@ -532,9 +573,15 @@ knn_wflow <-
 HEADS UP
 
 1. How many models have you specified?
+IK: It depends on what we mean by "models" here. Do we consider models neing different if they have different tuning parameters?
+We have 5 model types specified.
+
 2. What's the difference between a model specification and a workflow?
+IK: Model specification is just initiation of the model object and setting up the required parameters. Workflow, on the other hand, tracks the whole process from data cleaning to model estimation and fitting process and generating the metrics (post-processing).
+
 3. Do you need to add a formula (e.g., `test ~ .`)  if you have a recipe?
 
+IK: it is not clear in the question where one has to add this formula. We just specify this structure at the beginning when we initiate the recipe() and that is it, then we do transformation for the specified variables.
 
 # Model Comparison
 
@@ -542,6 +589,274 @@ You now have all your models. Adapt the code from slides `code-from-slides-CA-ho
 
 
 ```{r}
+
+## Evaluate Models
+
+## Logistic regression results{.smaller}
+
+log_res <- log_wflow %>% 
+  fit_resamples(
+    resamples = bechdel_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, accuracy,
+      kap, roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)) 
+
+```
+
+```{r}
+
+# Show average performance over all folds (note that we use log_res):
+log_res %>%  collect_metrics(summarize = TRUE)
+
+# Show performance for every single fold:
+log_res %>%  collect_metrics(summarize = FALSE)
+
+
+```
+
+
+```{r}
+
+
+
+## `collect_predictions()` and get confusion matrix{.smaller}
+
+log_pred <- log_res %>% collect_predictions()
+
+log_pred %>%  conf_mat(test, .pred_class) 
+
+log_pred %>% 
+  conf_mat(test, .pred_class) %>% 
+  autoplot(type = "mosaic") +
+  geom_label(aes(
+      x = (xmax + xmin) / 2, 
+      y = (ymax + ymin) / 2, 
+      label = c("TP", "FN", "FP", "TN")))
+
+
+log_pred %>% 
+  conf_mat(test, .pred_class) %>% 
+  autoplot(type = "heatmap")
+
+```
+
+
+```{r}
+
+## ROC Curve
+
+# log_pred %>% 
+#   group_by(id) %>% # id contains our folds
+#   roc_curve(test, .pred_above) %>% 
+#   autoplot()
+# 
+
+```
+
+
+```{r}
+
+## Decision Tree results
+
+tree_res <-
+  tree_wflow %>% 
+  fit_resamples(
+    resamples = bechdel_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)
+    ) 
+
+tree_res %>%  collect_metrics(summarize = TRUE)
+
+```
+
+```{r}
+
+
+## Random Forest
+
+rf_res <-
+  rf_wflow %>% 
+  fit_resamples(
+    resamples = bechdel_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)
+    ) 
+
+rf_res %>%  collect_metrics(summarize = TRUE)
+
+```
+
+
+
+```{r}
+
+
+## Boosted tree - XGBoost
+
+xgb_res <- 
+  xgb_wflow %>% 
+  fit_resamples(
+    resamples = bechdel_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)
+    ) 
+
+xgb_res %>% collect_metrics(summarize = TRUE)
+
+```
+
+```{r}
+library(kknn)
+## K-nearest neighbour
+
+knn_res <- 
+  knn_wflow %>% 
+  fit_resamples(
+    resamples = bechdel_folds, 
+    metrics = metric_set(
+      recall, precision, f_meas, 
+      accuracy, kap,
+      roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE)
+    ) 
+
+knn_res %>% collect_metrics(summarize = TRUE)
+
+```
+
+```{r}
+
+## Model Comparison
+
+log_metrics <- 
+  log_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  # add the name of the model to every row
+  mutate(model = "Logistic Regression") 
+
+tree_metrics <- 
+  tree_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Decision Tree")
+
+rf_metrics <- 
+  rf_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Random Forest")
+
+xgb_metrics <- 
+  xgb_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "XGBoost")
+
+knn_metrics <- 
+  knn_res %>% 
+  collect_metrics(summarise = TRUE) %>%
+  mutate(model = "Knn")
+
+```
+
+```{r}
+
+# create dataframe with all models
+model_compare <- bind_rows(log_metrics,
+                           tree_metrics,
+                           rf_metrics,
+                           xgb_metrics,
+                           knn_metrics) 
+
+#Pivot wider to create barplot
+  model_comp <- model_compare %>% 
+  select(model, .metric, mean, std_err) %>% 
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err)) 
+
+# show mean are under the curve (ROC-AUC) for every model
+model_comp %>% 
+  arrange(mean_roc_auc) %>% 
+  mutate(model = fct_reorder(model, mean_roc_auc)) %>% # order results
+  ggplot(aes(model, mean_roc_auc, fill=model)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Blues") +
+   geom_text(
+     size = 3,
+     aes(label = round(mean_roc_auc, 2), 
+         y = mean_roc_auc + 0.08),
+     vjust = 1
+  )+
+  theme_light()+
+  theme(legend.position = "none")+
+  labs(y = NULL)
+
+```
+
+```{r}
+
+## `last_fit()` on test set
+
+# - `last_fit()`  fits a model to the whole training data and evaluates it on the test set. 
+# - provide the workflow object of the best model as well as the data split object (not the training data). 
+ 
+last_fit_xgb <- last_fit(xgb_wflow, 
+                        split = data_split,
+                        metrics = metric_set(
+                          accuracy, f_meas, kap, precision,
+                          recall, roc_auc, sens, spec))
+
+last_fit_xgb %>% collect_metrics(summarize = TRUE)
+
+#Compare to training
+xgb_res %>% collect_metrics(summarize = TRUE)
+
+
+```
+
+```{r}
+
+## Variable importance using `{vip}` package
+
+library(vip)
+
+last_fit_xgb %>% 
+  pluck(".workflow", 1) %>%   
+  pull_workflow_fit() %>% 
+  vip(num_features = 10) +
+  theme_light()
+
+
+```
+
+```{r}
+
+## Final Confusion Matrix
+
+last_fit_xgb %>%
+  collect_predictions() %>% 
+  conf_mat(test, .pred_class) %>% 
+  autoplot(type = "heatmap")
+
+
+```
+
+```{r}
+# library(yardstick)
+# ## Final ROC curve
+# last_fit_xgb %>% 
+#   collect_predictions() %>% 
+#   roc_curve(test, .pred_above) %>% 
+#   autoplot()
+
 
 ```
 
